@@ -27,19 +27,33 @@ end
 @classify = !ARGV.select{|a| a =~ /\A([-]{1}(\w|1)*[F](\w|1)*|[-]{2}(classify))\z/}.empty?
 # true if ARGV contains -1
 @one_per_line = !ARGV.select{|a| a =~ /\A[-]{1}\w*1\w*\z/}.empty?
+# true if ARGV contains -d or --directory
+@ls_dirs = !ARGV.select{|a| a =~ /\A([-]{1}(\w|1)*[d](\w|1)*|[-]{2}(directory))\z/}.empty?
 
-output = `/bin/ls -F #{ARGV.join(' ')}`
+# wrap dirs in quotes so dirs with spaces don't fail with ls
+folders = ARGV.collect{|a| "\"" + a.gsub("/", "")  + "\"" if !a.start_with?("-") }
+argvs = ARGV.collect{|a| a if a.start_with?("-") }
+newargv = argvs.compact + folders.compact
+
+output = `/bin/ls -F #{newargv.join(' ')}`
 exit $?.exitstatus if $?.exitstatus != 0
 
 exit 0 if output == ""
 
 if @long_format
-  if ARGV.include?('--numeric-uid-gid')
-    ARGV.delete('--numeric-uid-gid')
+  newargv.delete('--numeric-uid-gid') unless !newargv.include?('--numeric-uid-gid')
+  newargv = newargv.collect{|a| a =~ /\A[-]{1}(\w|1)*(l|g|n|o)(\w|1)*\z/ ? a.delete('lngo') : a }.reject{|a| a == '-'}
+
+  first_file      = `/bin/ls #{newargv.join(' ')} | head -n 2`.split("\n")[0]
+  # if only dirs are listed ls doesn't display 'total [n]+[K]?' so the index has to be 0
+  @ls_dirs ? (indx = 0) : (indx = 1)
+  first_file_line = output.split("\n")[indx]
+
+  # in case of using -d filenames can be . or ..
+  if first_file_line == nil
+    first_file_line = output.split("\n")[0]
   end
-  newargv = ARGV.collect{|a| a =~ /\A[-]{1}(\w|1)*(l|g|n|o)(\w|1)*\z/ ? a.delete('lngo') : a }.reject{|a| a == '-'}
-  first_file      = `/bin/ls #{newargv.join(' ')}`.split("\n")[0]
-  first_file_line = output.split("\n")[1]
+
   @file_column = first_file_line.index(first_file)
 end
 
@@ -102,7 +116,7 @@ FileTypes = {}
 Extensions.keys.each { |key| FileTypes[key] = {:icon => Icons[key], :extensions => Extensions[key]} }
 
 ColumnSpacing = 2
-Separator = '  '
+Separator = ' '
 
 # if we want colors, get $LS_COLORS if it exists, otherwise use a standard
 if @using_color
@@ -131,15 +145,17 @@ output.lines.each do |line|
   extension.slice!(0) if extension[0] == "."
   icon = :blank
 
-  # ln -F matching takes precedence
+  # ls -F matching takes precedence except for executables
   if %w[ / * @ | = ].include? line[-1]
     case line[-1]
     when '/'
       extension = 'di'
       icon = :directory
     when '*'
-      extension = 'ex'
-      icon = :executable
+      if @classify
+        extension = 'ex'
+        icon = :executable
+      end
     when '@'
       extension = 'ln'
       icon = :link
